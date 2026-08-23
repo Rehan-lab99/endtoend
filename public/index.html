@@ -1,26 +1,17 @@
-<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>FreeChat — Secure Live Chat</title><link rel="stylesheet" href="style.css"><script src="/socket.io/socket.io.js"></script></head><body>
-<div class="app">
-<aside class="sidebar">
-  <div class="brand"><div class="brand-icon">✦</div><div><b>FREE<span>CHAT</span></b><small>Secure live chat</small></div></div>
-  <div class="room-card"><div class="label">ROOM</div><div class="room-id" id="roomIdLabel"></div><div class="status"><i></i><span id="onlineCount">1</span> online</div></div>
-  <div class="profile"><div class="avatar" id="avatar">G</div><div class="profile-main"><b id="sideName">Guest</b><small id="sideUid">FC-••••••••</small></div><button id="editName" title="Change name">✎</button></div>
-  <nav>
-    <button class="nav active" data-view="public"><span>💬</span> Public Chat <em>PUBLIC</em></button>
-    <button class="nav" data-view="private"><span>🔒</span> Private Chat</button>
-    <button class="nav" data-view="files"><span>📁</span> Files</button>
-    <button class="nav" data-view="people"><span>👥</span> People</button>
-    <button class="nav" data-view="share"><span>↗</span> Share Room</button>
-  </nav>
-  <div class="sidebar-foot">🔐 End-to-end transport<br><small>Your messages stay in this room.</small></div>
-</aside>
-<main class="main">
- <header><div><div class="title"><span class="tiny-logo">✦</span> FreeChat <span class="pill" id="headerPill">PUBLIC</span></div><small id="viewSubtitle">Public room · everyone in this room can see these messages</small></div><div class="connected"><i></i> Connected live</div></header>
- <section id="publicView" class="view active"><div class="notice">🔒 <span>Public messages are visible to everyone in this room. <b>Private messages are never shown here.</b></span></div><div class="messages" id="publicMessages"></div></section>
- <section id="privateView" class="view"><div class="private-panel"><div class="lock">🔒</div><h2>Private Chat</h2><p>Create or open a private link. Only people with that link can read and send messages in that private conversation.</p><div id="privateAccessBox"><button class="primary" id="createPrivate">Create Private Link</button></div></div><div class="messages" id="privateMessages"></div></section>
- <section id="filesView" class="view"><div class="file-panel"><div class="big-icon">📁</div><h2>Send files directly</h2><p>Files use WebRTC peer-to-peer transfer. The server only handles signaling.</p><input id="fileInput" type="file" multiple><label for="fileInput" class="primary file-label">Choose Files</label><div id="transfers"></div></div></section>
- <section id="peopleView" class="view"><div class="people" id="people"></div></section>
- <section id="shareView" class="view"><div class="share-panel"><h2>Share this room</h2><p>Share the public room URL. It does not expose private links.</p><div class="share-row"><input id="roomUrl" readonly><button class="primary" id="copyRoom">Copy</button></div><div class="qr" id="qr">QR</div></div></section>
- <div class="composer" id="composer"><div class="replybar" id="replybar"><span id="replyText"></span><button id="cancelReply">×</button></div><textarea id="input" placeholder="Type a message…" rows="1"></textarea><div class="composer-bottom"><button class="icon-btn" id="attach" title="Send files">📎</button><span class="counter" id="counter">0/5000</span><button class="send" id="send">➤</button></div></div>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>FreeChat — Secure Live Chat</title><link rel="stylesheet" href="style.css"><script src="/socket.io/socket.io.js"></script></head><body>
+<div class="app"><aside class="sidebar">
+<div class="brand"><div class="brand-icon">✦</div><div><b>FREE<span>CHAT</span></b><small>Secure live chat</small></div></div>
+<div class="room-card"><div class="label">ROOM</div><div class="room-id" id="roomIdLabel">Connecting…</div><div class="status"><i></i><span id="onlineCount">0</span> online</div></div>
+<div class="profile"><div class="avatar" id="avatar">G</div><div class="profile-main"><b id="sideName">Guest</b><small id="sideUid">FC-••••••••••</small></div><button id="editName">✎</button></div>
+<nav><button class="nav active" data-view="public"><span>💬</span> Public Chat</button><button class="nav" data-view="private"><span>🔒</span> Private Chat</button><button class="nav" data-view="people"><span>👥</span> Find Users</button><button class="nav" data-view="share"><span>↗</span> Share / QR</button></nav>
+<div class="sidebar-foot">🔐 Secure transport<br><small>File bytes use peer-to-peer WebRTC.</small></div></aside>
+<main class="main"><header><div><div class="title"><span class="tiny-logo">✦</span> FreeChat <span class="pill" id="headerPill">PUBLIC</span></div><small id="viewSubtitle">Public Chat · everyone in this room can see messages</small></div><div class="connected"><i></i> Connected live</div></header>
+<section id="publicView" class="view active"><div class="messages" id="publicMessages"></div></section>
+<section id="privateView" class="view"><div class="private-panel"><div class="lock">🔒</div><h2>Private Chat</h2><p>Only users with the same private link can see this conversation.</p><div id="privateAccessBox"><button class="primary" id="createPrivate">Create Private Link</button></div></div><div class="messages" id="privateMessages"></div></section>
+<section id="peopleView" class="view"><div class="people-panel"><h2>Find Users</h2><p>Search users currently connected to this room by display name or FreeChat ID.</p><input id="userSearch" class="search" placeholder="Search name or FC-ID…"><div class="people" id="people"></div></div></section>
+<section id="shareView" class="view"><div class="share-panel"><h2>Share FreeChat</h2><p>Share this public room link. The QR code below is generated from the same URL.</p><div class="share-row"><input id="roomUrl" readonly><button class="primary" id="copyRoom">Copy</button></div><div class="qr-wrap"><img id="qrImage" alt="FreeChat room QR"><button class="secondary" id="openQr">Open QR</button></div></div></section>
+<div class="composer" id="composer"><div class="replybar" id="replybar"><span id="replyText"></span><button id="cancelReply">×</button></div><div class="composer-row"><button class="icon-btn" id="attach" title="Send file">📎</button><textarea id="input" placeholder="Type a message…" rows="1"></textarea><button class="send" id="send">➤</button></div><div class="composer-bottom"><span class="file-hint">📎 Send files like WhatsApp · P2P WebRTC</span><span class="counter" id="counter">0/5000</span></div><input id="fileInput" type="file" multiple hidden><div id="transfers"></div></div>
 </main></div>
 <div class="modal" id="nameModal"><div class="modal-card"><h2>Your display name</h2><p>Choose the name others will see in FreeChat.</p><input id="nameInput" maxlength="30" placeholder="Your name"><button class="primary" id="saveName">Continue</button></div></div>
+<div class="modal" id="qrModal"><div class="modal-card qr-modal"><button class="close" id="closeQr">×</button><h2>Scan to join</h2><img id="qrModalImage" alt="FreeChat QR"><p>Scan this QR code with another phone.</p></div></div>
 <script src="app.js"></script></body></html>
