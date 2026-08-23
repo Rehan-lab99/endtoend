@@ -1,14 +1,90 @@
-const express=require('express');const http=require('http');const {Server}=require('socket.io');const crypto=require('crypto');
-const app=express(),server=http.createServer(app),io=new Server(server);app.use(express.static('public'));
-const rooms=new Map();
-function id(n=6){return crypto.randomBytes(n).toString('hex')}
-function getRoom(code){if(!rooms.has(code)) rooms.set(code,{publicMessages:[],privateMessages:new Map(),users:new Map(),privateToken:id(16)});return rooms.get(code)}
-function cleanMessage(m){return {id:m.id,userId:m.userId,name:String(m.name||'Guest').slice(0,40),text:String(m.text||'').slice(0,5000),time:m.time,replyTo:m.replyTo||null}}
-io.on('connection',s=>{
- s.on('join',({roomCode,userId,name,privateToken})=>{roomCode=String(roomCode||'').slice(0,40);if(!roomCode)return;const r=getRoom(roomCode);const privateAccess=privateToken===r.privateToken;s.data={roomCode,userId:String(userId||id(8)),name:String(name||'Guest').slice(0,40),privateAccess};r.users.set(s.id,{userId:s.data.userId,name:s.data.name,privateAccess});s.join(roomCode);s.emit('state',{publicMessages:r.publicMessages,privateMessages:privateAccess?(r.privateMessages.get(r.privateToken)||[]):[],privateAccess,privateToken:r.privateToken,users:[...r.users.values()].map(x=>({userId:x.userId,name:x.name,privateAccess:x.privateAccess}))});io.to(roomCode).emit('users',[...r.users.values()].map(x=>({userId:x.userId,name:x.name,privateAccess:x.privateAccess})));});
- s.on('public:message',raw=>{const d=s.data;if(!d?.roomCode)return;const r=getRoom(d.roomCode);const m=cleanMessage({...raw,userId:d.userId,name:d.name,id:id(8),time:Date.now()});r.publicMessages.push(m);if(r.publicMessages.length>500)r.publicMessages.shift();io.to(d.roomCode).emit('public:message',m)});
- s.on('private:message',raw=>{const d=s.data;if(!d?.roomCode||!d.privateAccess)return;const r=getRoom(d.roomCode);const m=cleanMessage({...raw,userId:d.userId,name:d.name,id:id(8),time:Date.now()});let arr=r.privateMessages.get(r.privateToken)||[];arr.push(m);if(arr.length>500)arr.shift();r.privateMessages.set(r.privateToken,arr);for(const [sid,u] of r.users){if(u.privateAccess)io.to(sid).emit('private:message',m)}});
- s.on('disconnect',()=>{const d=s.data;if(!d?.roomCode)return;const r=rooms.get(d.roomCode);if(!r)return;r.users.delete(s.id);io.to(d.roomCode).emit('users',[...r.users.values()].map(x=>({userId:x.userId,name:x.name,privateAccess:x.privateAccess})));});
+const express = require('express');
+const http = require('http');
+const crypto = require('crypto');
+const { Server } = require('socket.io');
+const path = require('path');
+
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server, { maxHttpBufferSize: 2 * 1024 * 1024 });
+app.use(express.static(path.join(__dirname, 'public')));
+
+const rooms = new Map();
+const privateTokens = new Map();
+const uid = () => 'FC-' + crypto.randomBytes(4).toString('hex').toUpperCase();
+const rid = () => crypto.randomBytes(5).toString('hex');
+
+function getRoom(id){
+  if(!rooms.has(id)) rooms.set(id,{users:new Map(),messages:[]});
+  return rooms.get(id);
+}
+function emitUsers(roomId){
+  const room=getRoom(roomId);
+  io.to(roomId).emit('users', [...room.users.values()].map(u=>({id:u.id,name:u.name}))); 
+}
+function safeName(n){ return String(n||'Guest').trim().slice(0,30)||'Guest'; }
+function publicState(roomId){
+  const room=getRoom(roomId);
+  return {messages:room.messages.filter(m=>m.scope==='public').slice(-100)};
+}
+
+io.on('connection', socket=>{
+  socket.on('join', ({roomId,name,userId,privateToken})=>{
+    roomId = roomId || rid();
+    const room=getRoom(roomId);
+    const tokenOk = privateToken && privateTokens.get(privateToken)?.roomId===roomId;
+    const id=userId || uid();
+    const user={id,name:safeName(name),socketId:socket.id,privateAccess:!!tokenOk};
+    socket.data={roomId,userId:id,privateAccess:!!tokenOk};
+    socket.join(roomId); room.users.set(id,user);
+    socket.emit('ready',{roomId,userId:id,privateAccess:!!tokenOk,public:publicState(roomId)});
+    emitUsers(roomId);
+  });
+
+  socket.on('name', name=>{
+    const d=socket.data||{}; const room=rooms.get(d.roomId); if(!room)return;
+    const u=room.users.get(d.userId); if(!u)return; u.name=safeName(name);
+    emitUsers(d.roomId);
+  });
+
+  socket.on('publicMessage', ({text,replyTo})=>{
+    const d=socket.data||{}, room=rooms.get(d.roomId); if(!room||!text)return;
+    const u=room.users.get(d.userId); if(!u)return;
+    const msg={id:crypto.randomUUID(),scope:'public',userId:d.userId,name:u.name,text:String(text).slice(0,5000),replyTo:replyTo||null,time:Date.now()};
+    room.messages.push(msg); if(room.messages.length>500)room.messages.shift(); io.to(d.roomId).emit('message',msg);
+  });
+
+  socket.on('privateMessage', ({token,text,replyTo})=>{
+    const d=socket.data||{}, access=privateTokens.get(token); if(!access||access.roomId!==d.roomId||!d.privateAccess||!text)return;
+    const room=rooms.get(d.roomId),u=room?.users.get(d.userId); if(!u)return;
+    const msg={id:crypto.randomUUID(),scope:'private',token,userId:d.userId,name:u.name,text:String(text).slice(0,5000),replyTo:replyTo||null,time:Date.now()};
+    access.messages.push(msg); if(access.messages.length>200)access.messages.shift();
+    io.to(d.roomId).emit('privateMessage',msg); // clients filter by token
+  });
+
+  socket.on('createPrivate',()=>{
+    const d=socket.data||{}; if(!d.roomId)return;
+    const token=crypto.randomBytes(18).toString('base64url'); privateTokens.set(token,{roomId:d.roomId,messages:[]});
+    socket.emit('privateCreated',{token});
+  });
+
+  socket.on('getPrivateHistory',token=>{
+    const d=socket.data||{},a=privateTokens.get(token); if(!a||a.roomId!==d.roomId||!d.privateAccess)return;
+    socket.emit('privateHistory',a.messages.slice(-100));
+  });
+
+  // WebRTC signaling only; file bytes stay in browser data channels.
+  socket.on('rtc', payload=>{
+    const d=socket.data||{}; if(!d.roomId)return;
+    socket.to(d.roomId).emit('rtc',{from:d.userId,...payload});
+  });
+
+  socket.on('disconnect',()=>{
+    const d=socket.data||{},room=rooms.get(d.roomId); if(!room)return;
+    room.users.delete(d.userId); emitUsers(d.roomId);
+    if(room.users.size===0) setTimeout(()=>{const r=rooms.get(d.roomId); if(r&&r.users.size===0)rooms.delete(d.roomId)}, 600000);
+  });
 });
-app.get('/api/room/:code',(req,res)=>{const r=getRoom(req.params.code);res.json({privateToken:r.privateToken})});
-const PORT=process.env.PORT||5000;server.listen(PORT,'0.0.0.0',()=>console.log('ShareClone 2 running on '+PORT));
+
+const PORT=process.env.PORT||5000;
+server.listen(PORT,'0.0.0.0',()=>console.log(`FreeChat running on port ${PORT}`));
