@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ShareClone — P2P</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif;background:#09111f;color:#edf4ff}.wrap{max-width:1050px;margin:auto;padding:22px}.top{display:flex;justify-content:space-between;gap:14px;align-items:center}.logo{font-size:26px;font-weight:850}.muted{color:#8ea0bd}.card{background:#111c2e;border:1px solid #263751;border-radius:18px;padding:18px;margin-top:16px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}button,.btn{border:0;border-radius:10px;padding:11px 15px;font-weight:750;cursor:pointer;background:#6574ff;color:#fff}.secondary{background:#22304a}.danger{background:#9e3d50}button:disabled{opacity:.5;cursor:not-allowed}.room{font-family:ui-monospace,monospace;background:#08101d;padding:10px;border-radius:10px;word-break:break-all}.qr{width:150px;background:white;padding:7px;border-radius:12px;margin-top:12px}textarea{width:100%;min-height:180px;background:#08101d;color:#fff;border:1px solid #2c3d5b;border-radius:12px;padding:13px;resize:vertical}.drop{border:2px dashed #3b4c6b;padding:24px;text-align:center;border-radius:14px}.progress{height:10px;background:#26354e;border-radius:20px;overflow:hidden}.bar{height:100%;width:0;background:#7180ff;transition:width .08s}.status{min-height:22px}.msgs{max-height:300px;overflow:auto}.msg{padding:10px;border-bottom:1px solid #25334b;white-space:pre-wrap;word-break:break-word}.peer{font-family:ui-monospace,monospace;font-size:12px;background:#0a1424;padding:7px 9px;border-radius:8px;margin-top:7px}.hint{font-size:13px;line-height:1.5}.pill{display:inline-flex;padding:5px 9px;border-radius:999px;background:#1e2c44;font-size:12px}.file-item{padding:12px 0;border-bottom:1px solid #26354c}.file-actions{margin-top:8px}.ok{color:#6ee7a3}.warn{color:#ffd166}@media(max-width:720px){.grid{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}}
+</style>
+</head>
+<body><div class="wrap">
+<div class="top"><div><div class="logo">ShareClone P2P</div><div class="muted">Private room sharing with WebRTC</div></div><div class="row"><button id="newRoom">New room</button><button class="secondary" id="copyRoom">Copy link</button></div></div>
+<div class="card"><div class="muted">Room</div><div id="room" class="room">Creating…</div><div class="row" style="margin-top:12px"><span class="pill">Online: <b id="online" style="margin-left:5px">0</b></span><span id="rtcStatus" class="pill">Connecting…</span></div><img id="qr" class="qr" hidden></div>
+<div class="grid">
+<div class="card"><h3>Text / Code</h3><textarea id="text" placeholder="Type text or code…"></textarea><div class="row" style="margin-top:10px"><button id="send">Send to peers</button><button class="secondary" id="clear">Clear</button></div></div>
+<div class="card"><h3>Large File Sharing</h3><div class="drop"><input id="file" type="file"><p class="hint muted">Files go directly between browsers over WebRTC. The server handles only signaling; it does not receive the file bytes.</p><div class="row" style="justify-content:center"><button id="sendFile">Send file</button><button class="secondary" id="pause" disabled>Pause</button><button class="danger" id="cancel" disabled>Cancel</button></div><div style="margin-top:15px" class="progress"><div id="bar" class="bar"></div></div><div id="status" class="status muted"></div></div><div id="files"></div></div>
+</div>
+<div class="card"><h3>Peers</h3><div id="peers" class="muted">No peers connected yet.</div><p class="hint muted">WebRTC data channels use encrypted DTLS transport. For best large-file performance, keep both browsers open and use a Chromium-based browser with a stable connection.</p></div>
+<div class="card"><h3>Room messages</h3><div id="msgs" class="msgs"></div></div>
+</div>
+<script src="/socket.io/socket.io.js"></script><script>
+const socket=io();
+const qs=new URLSearchParams(location.search); let roomId=qs.get('room');
+const peers=new Map(); let selfId=null; let sendState=null; const incoming=new Map();
+const $=s=>document.querySelector(s); const roomEl=$('#room');
+const RTC_CONFIG={iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun.cloudflare.com:3478'}]};
+
+function setRtcStatus(t){$('#rtcStatus').textContent=t}
+function addMsg(t){const d=document.createElement('div');d.className='msg';d.textContent=t;$('#msgs').prepend(d)}
+function peerLabel(id){return id?`Peer ${id.slice(0,6)}`:'Peer'}
+function refreshPeers(){const box=$('#peers'); box.innerHTML=''; if(!peers.size){box.textContent='No peers connected yet.';return} for(const [id,p] of peers){const d=document.createElement('div');d.className='peer';d.textContent=`${peerLabel(id)} — ${p.dc?.readyState||'connecting'}`;box.appendChild(d)}}
+function signal(to,data){socket.emit('signal',{to,data})}
+
+function makePeer(id,initiator){
+  if(peers.has(id)) return peers.get(id);
+  const pc=new RTCPeerConnection(RTC_CONFIG); const p={pc,dc:null,initiator}; peers.set(id,p); refreshPeers();
+  pc.onicecandidate=e=>{if(e.candidate) signal(id,{type:'candidate',candidate:e.candidate})};
+  pc.onconnectionstatechange=()=>{refreshPeers(); if(['failed','closed','disconnected'].includes(pc.connectionState)){peers.delete(id);refreshPeers();setRtcStatus(peers.size?'Connected':'Waiting for peer…')}};
+  pc.ondatachannel=e=>attachChannel(id,e.channel);
+  if(initiator){const dc=pc.createDataChannel('share',{ordered:true});attachChannel(id,dc);pc.createOffer().then(o=>pc.setLocalDescription(o)).then(()=>signal(id,{type:'offer',sdp:pc.localDescription}))}
+  return p;
+}
+function attachChannel(id,dc){const p=peers.get(id); if(!p)return; p.dc=dc; dc.binaryType='arraybuffer'; dc.onopen=()=>{setRtcStatus('P2P connected');refreshPeers()}; dc.onclose=()=>refreshPeers(); dc.onerror=()=>addMsg(`${peerLabel(id)} data channel error`); dc.onmessage=e=>handleData(id,e.data); refreshPeers()}
+
+socket.on('room-info',({peerId,existingPeers})=>{selfId=peerId; for(const id of existingPeers) makePeer(id,true); setRtcStatus(existingPeers.length?'Connecting…':'Waiting for peer…')});
+socket.on('peer-joined',({peerId})=>{makePeer(peerId,false)});
+socket.on('peer-left',({peerId})=>{peers.delete(peerId);refreshPeers()});
+socket.on('presence',n=>$('#online').textContent=n);
+socket.on('signal',async({from,data})=>{const p=makePeer(from,false); if(data.type==='offer'){await p.pc.setRemoteDescription(data.sdp);const a=await p.pc.createAnswer();await p.pc.setLocalDescription(a);signal(from,{type:'answer',sdp:p.pc.localDescription})}else if(data.type==='answer'){await p.pc.setRemoteDescription(data.sdp)}else if(data.type==='candidate'){try{await p.pc.addIceCandidate(data.candidate)}catch(e){console.warn(e)}}});
+
+async function createRoom(){const r=await fetch('/api/room').then(x=>x.json());roomId=r.id;history.replaceState({},'',`?room=${roomId}`);roomEl.textContent=r.url;$('#qr').src=r.qr;$('#qr').hidden=false;socket.emit('join',roomId)}
+if(roomId){roomEl.textContent=location.href;socket.emit('join',roomId)}else createRoom();
+$('#newRoom').onclick=()=>{location.href=location.pathname}; $('#copyRoom').onclick=async()=>{await navigator.clipboard.writeText(location.href);$('#status').textContent='Room link copied'};
+$('#send').onclick=()=>{const v=$('#text').value.trim();if(!v)return;const packet=JSON.stringify({t:'text',text:v});let sent=0;for(const p of peers.values())if(p.dc?.readyState==='open'){p.dc.send(packet);sent++}addMsg(`You → ${sent} peer(s): ${v}`);$('#text').value=''};
+$('#clear').onclick=()=>{for(const p of peers.values())if(p.dc?.readyState==='open')p.dc.send(JSON.stringify({t:'clear'}));$('#msgs').innerHTML=''};
+
+function pauseSend(){if(!sendState)return;sendState.paused=!sendState.paused;$('#pause').textContent=sendState.paused?'Resume':'Pause';$('#status').textContent=sendState.paused?'Paused':'Sending…'}
+function cancelSend(){if(sendState){sendState.cancelled=true;sendState.paused=false}}
+$('#pause').onclick=pauseSend;$('#cancel').onclick=cancelSend;
+async function sendFile(){
+ const file=$('#file').files[0]; if(!file)return alert('Choose a file first'); const targets=[...peers.values()].filter(p=>p.dc?.readyState==='open'); if(!targets.length)return alert('No P2P peer is connected yet. Open the same room on another device first.');
+ sendState={paused:false,cancelled:false}; $('#pause').disabled=false;$('#cancel').disabled=false;$('#bar').style.width='0%';
+ const id=crypto.randomUUID(); const chunkSize=16*1024; const meta={t:'file-meta',id,name:file.name,size:file.size,type:file.type||'application/octet-stream',chunkSize};
+ targets.forEach(p=>p.dc.send(JSON.stringify(meta))); let offset=0; let seq=0;
+ try{while(offset<file.size){if(sendState.cancelled)throw new Error('cancelled');while(sendState.paused)await new Promise(r=>setTimeout(r,150));const end=Math.min(offset+chunkSize,file.size);const buf=await file.slice(offset,end).arrayBuffer();for(const p of targets){if(p.dc.readyState!=='open')continue;await waitBuffer(p.dc,2*1024*1024);p.dc.send(buf)}offset=end;seq++;$('#bar').style.width=(offset/file.size*100).toFixed(2)+'%';$('#status').textContent=`Sending ${formatBytes(offset)} / ${formatBytes(file.size)} (${(offset/file.size*100).toFixed(1)}%)`;await new Promise(r=>setTimeout(r,0))}
+ targets.forEach(p=>p.dc.send(JSON.stringify({t:'file-end',id})));$('#status').innerHTML='<span class="ok">File sent successfully.</span>';addMsg(`File sent: ${file.name} (${formatBytes(file.size)})`);
+ }catch(e){$('#status').textContent=e.message==='cancelled'?'Transfer cancelled':`Transfer error: ${e.message}`}finally{sendState=null;$('#pause').disabled=true;$('#cancel').disabled=true;$('#pause').textContent='Pause'}
+}
+function waitBuffer(dc,max){return new Promise((resolve,reject)=>{if(dc.bufferedAmount<=max)return resolve();const timer=setInterval(()=>{if(dc.readyState!=='open'){clearInterval(timer);return reject(new Error('Peer disconnected'))}if(dc.bufferedAmount<=max){clearInterval(timer);resolve()}},20)})}
+$('#sendFile').onclick=sendFile;
+
+async function handleData(peerId,data){
+ if(typeof data==='string'){let m;try{m=JSON.parse(data)}catch{return} if(m.t==='text')addMsg(`${peerLabel(peerId)}: ${m.text}`); if(m.t==='clear')$('#msgs').innerHTML=''; if(m.t==='file-meta'){incoming.set(m.id,{...m,chunks:[],received:0,started:Date.now()});renderIncoming(m.id)} if(m.t==='file-end')finishIncoming(m.id);return}
+ // Binary chunk: the receiver assigns it to the newest active transfer from this peer.
+ const active=[...incoming.values()].filter(x=>x.peerId===peerId||!x.peerId); if(!active.length)return; const f=active[active.length-1]; f.peerId=peerId; f.chunks.push(data);f.received+=data.byteLength;renderIncoming(f.id);
+}
+function renderIncoming(id){const f=incoming.get(id);if(!f)return;let el=document.getElementById('in-'+id);if(!el){el=document.createElement('div');el.className='file-item';el.id='in-'+id;$('#files').prepend(el)}const pct=f.size?f.received/f.size*100:0;el.innerHTML=`<b>${escapeHtml(f.name)}</b><div class="progress" style="margin-top:8px"><div class="bar" style="width:${pct}%"></div></div><div class="muted" style="margin-top:6px">Receiving ${formatBytes(f.received)} / ${formatBytes(f.size)} (${pct.toFixed(1)}%)</div>`}
+async function finishIncoming(id){const f=incoming.get(id);if(!f)return; const blob=new Blob(f.chunks,{type:f.type}); const url=URL.createObjectURL(blob);const el=document.getElementById('in-'+id); if(el)el.innerHTML=`<b>${escapeHtml(f.name)}</b><div class="ok">Received ${formatBytes(f.size)}</div><div class="file-actions"><a class="btn" href="${url}" download="${escapeAttr(f.name)}">Download file</a></div>`;incoming.delete(id);addMsg(`Received file: ${f.name} (${formatBytes(f.size)})`)}
+function formatBytes(n){if(!n)return'0 B';const u=['B','KB','MB','GB','TB'];const i=Math.min(Math.floor(Math.log(n)/Math.log(1024)),u.length-1);return`${(n/1024**i).toFixed(i?2:0)} ${u[i]}`}
+function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}function escapeAttr(s){return escapeHtml(s)}
+</script></body></html>
