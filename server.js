@@ -1,72 +1,14 @@
-import express from 'express';
-import http from 'http';
-import { Server } from 'socket.io';
-import QRCode from 'qrcode';
-import { randomUUID } from 'crypto';
-
-const app = express();
-const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: true, credentials: false } });
-const PORT = process.env.PORT || 5000;
-const rooms = new Map();
-
-app.use(express.static('public'));
-
-app.get('/api/room', async (req, res) => {
-  const id = randomUUID().replaceAll('-', '').slice(0, 10);
-  rooms.set(id, { created: Date.now(), users: 0 });
-  const base = `${req.protocol}://${req.get('host')}`;
-  const url = `${base}/?room=${id}`;
-  const qr = await QRCode.toDataURL(url, { margin: 1, width: 240 });
-  res.json({ id, url, qr });
+const express=require('express');const http=require('http');const {Server}=require('socket.io');const crypto=require('crypto');
+const app=express(),server=http.createServer(app),io=new Server(server);app.use(express.static('public'));
+const rooms=new Map();
+function id(n=6){return crypto.randomBytes(n).toString('hex')}
+function getRoom(code){if(!rooms.has(code)) rooms.set(code,{publicMessages:[],privateMessages:new Map(),users:new Map(),privateToken:id(16)});return rooms.get(code)}
+function cleanMessage(m){return {id:m.id,userId:m.userId,name:String(m.name||'Guest').slice(0,40),text:String(m.text||'').slice(0,5000),time:m.time,replyTo:m.replyTo||null}}
+io.on('connection',s=>{
+ s.on('join',({roomCode,userId,name,privateToken})=>{roomCode=String(roomCode||'').slice(0,40);if(!roomCode)return;const r=getRoom(roomCode);const privateAccess=privateToken===r.privateToken;s.data={roomCode,userId:String(userId||id(8)),name:String(name||'Guest').slice(0,40),privateAccess};r.users.set(s.id,{userId:s.data.userId,name:s.data.name,privateAccess});s.join(roomCode);s.emit('state',{publicMessages:r.publicMessages,privateMessages:privateAccess?(r.privateMessages.get(r.privateToken)||[]):[],privateAccess,privateToken:r.privateToken,users:[...r.users.values()].map(x=>({userId:x.userId,name:x.name,privateAccess:x.privateAccess}))});io.to(roomCode).emit('users',[...r.users.values()].map(x=>({userId:x.userId,name:x.name,privateAccess:x.privateAccess})));});
+ s.on('public:message',raw=>{const d=s.data;if(!d?.roomCode)return;const r=getRoom(d.roomCode);const m=cleanMessage({...raw,userId:d.userId,name:d.name,id:id(8),time:Date.now()});r.publicMessages.push(m);if(r.publicMessages.length>500)r.publicMessages.shift();io.to(d.roomCode).emit('public:message',m)});
+ s.on('private:message',raw=>{const d=s.data;if(!d?.roomCode||!d.privateAccess)return;const r=getRoom(d.roomCode);const m=cleanMessage({...raw,userId:d.userId,name:d.name,id:id(8),time:Date.now()});let arr=r.privateMessages.get(r.privateToken)||[];arr.push(m);if(arr.length>500)arr.shift();r.privateMessages.set(r.privateToken,arr);for(const [sid,u] of r.users){if(u.privateAccess)io.to(sid).emit('private:message',m)}});
+ s.on('disconnect',()=>{const d=s.data;if(!d?.roomCode)return;const r=rooms.get(d.roomCode);if(!r)return;r.users.delete(s.id);io.to(d.roomCode).emit('users',[...r.users.values()].map(x=>({userId:x.userId,name:x.name,privateAccess:x.privateAccess})));});
 });
-
-io.on('connection', socket => {
-  socket.on('join', room => {
-    if (typeof room !== 'string' || !/^[a-zA-Z0-9_-]{4,40}$/.test(room)) return;
-    if (!rooms.has(room)) rooms.set(room, { created: Date.now(), users: 0 });
-    const members = [...(io.sockets.adapter.rooms.get(room) || [])];
-    socket.join(room);
-    socket.data.room = room;
-    socket.data.peerId = socket.id;
-    socket.emit('room-info', { peerId: socket.id, existingPeers: members });
-    socket.to(room).emit('peer-joined', { peerId: socket.id });
-    rooms.get(room).users = (io.sockets.adapter.rooms.get(room)?.size || 0);
-    io.to(room).emit('presence', rooms.get(room).users);
-  });
-
-  // WebRTC signaling. The server never sees the file payload.
-  socket.on('signal', ({ to, data }) => {
-    if (!to || !data || !socket.data.room) return;
-    const target = io.sockets.sockets.get(to);
-    if (!target || target.data.room !== socket.data.room) return;
-    target.emit('signal', { from: socket.id, data });
-  });
-
-  socket.on('message', msg => {
-    if (socket.data.room) socket.to(socket.data.room).emit('message', msg);
-  });
-
-  socket.on('clear', () => {
-    if (socket.data.room) io.to(socket.data.room).emit('clear');
-  });
-
-  socket.on('disconnect', () => {
-    const room = socket.data.room;
-    if (!room) return;
-    socket.to(room).emit('peer-left', { peerId: socket.id });
-    const r = rooms.get(room);
-    if (r) {
-      r.users = Math.max(0, (io.sockets.adapter.rooms.get(room)?.size || 0));
-      io.to(room).emit('presence', r.users);
-      if (r.users === 0 && Date.now() - r.created > 6 * 60 * 60 * 1000) rooms.delete(room);
-    }
-  });
-});
-
-setInterval(() => {
-  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-  for (const [id, r] of rooms) if (r.users === 0 && r.created < cutoff) rooms.delete(id);
-}, 10 * 60 * 1000);
-
-server.listen(PORT, '0.0.0.0', () => console.log(`ShareClone WebRTC running on port ${PORT}`));
+app.get('/api/room/:code',(req,res)=>{const r=getRoom(req.params.code);res.json({privateToken:r.privateToken})});
+const PORT=process.env.PORT||5000;server.listen(PORT,'0.0.0.0',()=>console.log('ShareClone 2 running on '+PORT));
