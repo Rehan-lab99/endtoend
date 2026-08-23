@@ -1,8 +1,13 @@
 {
-  "name":"freechat",
-  "version":"1.0.0",
-  "private":true,
-  "type":"commonjs",
-  "scripts":{"start":"node server.js"},
-  "dependencies":{"express":"^4.21.2","socket.io":"^4.8.1"}
+  "name": "freechat",
+  "version": "3.0.0",
+  "private": true,
+  "description": "FreeChat public/private chat with P2P file sharing and QR room sharing",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "dependencies": {
+    "express": "^4.21.2",
+    "qrcode": "^1.5.4",
+    "socket.io": "^4.8.1"
+  }
 }
